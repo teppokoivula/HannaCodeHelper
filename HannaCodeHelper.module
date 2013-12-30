@@ -1,0 +1,135 @@
+<?php
+
+/**
+ * Hanna Code Helper
+ *
+ * This module adds a Hanna Code helper plugin to any field with a supported
+ * editor (which currently means CKEditor) and Hanna Code textformatter. The
+ * purpose of this plugin is to provide a simple way to select and embed any
+ * availa ble Hanna Code tag.
+ *
+ * @author Teppo Koivula <teppo@flamingruby.com>
+ *
+ * ProcessWire 2.x 
+ * Copyright (C) 2013 by Ryan Cramer 
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ * 
+ * http://processwire.com
+ *
+ */
+class HannaCodeHelper extends WireData implements Module {
+
+    /**
+     * Return information about this module (required)
+     *
+     * @return array
+     */
+    public static function getModuleInfo() {
+        return array(
+            'title' => 'Hanna Code Helper',
+            'summary' => 'Adds a helper plugin to fields with supported editor and TextformatterHannaCode enabled.',
+            'author' => 'Teppo Koivula',
+            'version' => 50,
+            'singular' => true,
+            'autoload' => true,
+            'requires' => array(
+                'ProcessHannaCode',
+                'TextformatterHannaCode'
+            )
+        ); 
+    }
+
+    /**
+     * Initialization function
+     *
+     * This function attachs required hooks.
+     *
+     */
+    public function init() {
+
+        // hook after ProcessPageEdit::execute to apply scripts etc.
+        $this->addHookAfter('ProcessPageEdit::execute', $this, 'inject');
+
+    }
+
+    /**
+     * This function is executed after Execute method of Process Page Edit
+     *
+     * We're hooking here to inject JavaScript that loads and enables an editor
+     * plugin and also generates hanna_code_tags JS variable containing list of
+     * all available Hanna Code tags in JSON format.
+     *
+     * @param HookEvent $event
+     */
+    public function inject(HookEvent $event) {
+
+        // this only applies to page edit view (admin)
+        if ($event->object->page->process != "ProcessPageEdit") return;
+
+        // mostly for performance reasons fetch possible candidates for
+        // hannacode editor plugin from JavaScript config (jsConfig)
+        $js = "";
+        $jsConfig = $this->config->js();
+        foreach ($jsConfig as $key => $value) {
+            if (strpos($key, "InputfieldCKEditor_") !== false) {
+                // config row for field with CKEditor enabled
+                $field = $this->fields->get(substr($key, 19));
+                if (is_array($field->textformatters) && in_array("TextformatterHannaCode", $field->textformatters)) {
+                    // this field also has TextformatterHannaCode enabled,
+                    // enable hannacode plugin via "extraPlugins" setting
+                    $js .= "config.InputfieldCKEditor_{$field->name}.extraPlugins += ',hannacode';";
+                }
+            }
+        }
+
+        // return if no matching fields were found
+        if (!$js) return;
+
+        // add external hannacode CKEditor plugin
+        $ckeditor_hannacode_path = $this->config->urls->{$this->className} . "ckeditor-hannacode/";
+        $js = "CKEDITOR.plugins.addExternal('hannacode', '{$ckeditor_hannacode_path}');" . $js;
+
+        // add JS var containing hanna code tags
+        $js = "var hanna_code_tags = {$this->getJSON()};" . $js;
+
+        $event->return = "<script type='text/javascript'>{$js}</script>" . $event->return;
+
+    }
+
+    /**
+     * Get Hanna Code tags from database and encode them as JSON
+     *
+     * This method is based on original code from ProcessHannaCode module
+     * by Ryan Cramer (https://github.com/ryancramerdesign/ProcessHannaCode).
+     * 
+     * @return string Hanna Code tags as JSON
+     */
+	public function getJSON() {
+
+        // basic settings
+		$data = $this->modules->getModuleConfigData('TextformatterHannaCode'); 
+		$openTag = isset($data['openTag']) ? $data['openTag'] : TextformatterHannaCode::DEFAULT_OPEN_TAG;
+        $closeTag = isset($data['closeTag']) ? $data['closeTag'] : TextformatterHannaCode::DEFAULT_CLOSE_TAG; 
+        
+        // instantiate TextformatterHannaCode
+        $hanna = $this->modules->get('TextformatterHannaCode');
+
+        // fetch Hanna Code tags from database
+        $return = array();
+		$result = $this->db->query("SELECT name, code FROM hanna_code ORDER BY name"); 
+		while ($row = $result->fetch_row()) {
+            list($name, $code) = $row;
+			$attrs = '';
+			foreach ($hanna->extractDefaultCodeAttrs($code) as $attrName => $attrValue) {
+				$attrs .= " $attrName=\"$attrValue\"";
+			}
+			if (preg_match('/[a-zA-Z0-9]$/', $openTag)) $name = " name=\"$name\"";
+            $tag = $openTag . $name . $attrs . $closeTag;
+            $return[] = array($tag);
+        }
+            
+		return json_encode($return);
+
+	}
+
+}
